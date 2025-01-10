@@ -409,4 +409,55 @@ df = df.withColumn("lemmatized_text", lemmatize_text_udf(col("stemmed_text")))
 df.write.csv(output_path, header=True)
 
 
+from pyspark.sql import SparkSession
 
+# Initialize Spark session
+spark = SparkSession.builder \
+    .appName("BigQuery-Spark Integration") \
+    .getOrCreate()
+
+# Define configurations
+project_id = "your_project_id"
+input_table = "your_project_id.your_dataset.your_table"
+output_table = "your_project_id.your_dataset.output_table"
+
+# Read data from BigQuery into a Spark DataFrame
+df = spark.read.format("bigquery") \
+    .option("project", project_id) \
+    .option("table", input_table) \
+    .load()
+
+# Perform a transformation (e.g., filtering rows)
+transformed_df = df.filter(df["column_name"] == "some_value")
+
+# Write the transformed data back to BigQuery
+transformed_df.write.format("bigquery") \
+    .option("table", output_table) \
+    .option("writeMethod", "direct") \  # Options: 'direct' (default) or 'indirect'
+    .save()
+
+# Stop the Spark session
+spark.stop()
+
+
+from google_cloud_pipeline_components.v1.dataproc import DataprocPySparkBatchOp
+from kfp.v2.dsl import pipeline
+
+@pipeline(name="bigquery-spark-pipeline", pipeline_root="gs://your-bucket/pipeline-root")
+def bigquery_spark_pipeline():
+    spark_job = DataprocPySparkBatchOp(
+        project="your_project_id",
+        location="your_region",
+        batch_id="bigquery-spark-job",
+        batch={
+            "pyspark_batch": {
+                "main_python_file_uri": "gs://your-bucket/pyspark/bigquery_spark_job.py",  # Path to PySpark script
+            },
+        },
+        cluster_name="your-dataproc-cluster",  # Use a pre-existing or dynamically created cluster
+    )
+
+
+
+
+ 
