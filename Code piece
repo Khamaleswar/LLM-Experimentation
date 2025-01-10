@@ -167,3 +167,102 @@ processed_df.write.csv(output_path, header=True, mode="overwrite")
 
 # Stop Spark Session
 spark.stop()
+
+
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, udf
+from pyspark.sql.types import StringType
+from bs4 import BeautifulSoup
+import re
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer, PorterStemmer
+import tensorflow as tf
+import nltk
+
+# Download NLTK resources
+nltk.download("stopwords")
+nltk.download("wordnet")
+
+# Initialize stopwords, lemmatizer, and stemmer
+stop_words = set(stopwords.words("english"))
+lemmatizer = WordNetLemmatizer()
+stemmer = PorterStemmer()
+
+# Initialize Spark Session
+spark = SparkSession.builder \
+    .appName("TextProcessingTFRecords") \
+    .getOrCreate()
+
+# Input and output paths
+input_path = "gs://your-bucket/tfrecords_data/*.tfrecord"  # TFRecords input path
+output_path = "gs://your-bucket/processed_output/"        # Processed output path
+
+# Function to parse TFRecords
+def parse_example(serialized_example):
+    """Parse a single TFRecord example."""
+    feature_description = {
+        "text": tf.io.FixedLenFeature([], tf.string),  # Text column in TFRecord
+    }
+    example = tf.io.parse_single_example(serialized_example, feature_description)
+    return {"text": example["text"].numpy().decode("utf-8")}
+
+# Load TFRecords as a Spark DataFrame
+raw_rdd = spark.sparkContext.newAPIHadoopFile(
+    input_path,
+    "org.tensorflow.hadoop.io.TFRecordFileInputFormat",
+    "org.apache.hadoop.io.BytesWritable",
+    "org.apache.hadoop.io.NullWritable",
+).map(lambda x: parse_example(x[0].copyBytes()))
+
+df = spark.createDataFrame(raw_rdd)
+
+# UDFs for text processing
+def clean_html(text):
+    """Remove HTML tags from text."""
+    return BeautifulSoup(text, "html.parser").get_text()
+
+def clean_urls(text):
+    """Remove URLs from text."""
+    return re.sub(r"http\S+|www\S+|https\S+", "", text, flags=re.MULTILINE)
+
+def remove_stopwords(text):
+    """Remove stopwords from text."""
+    words = text.split()
+    return " ".join([word for word in words if word.lower() not in stop_words])
+
+def lemmatize(text):
+    """Perform lemmatization on text."""
+    words = text.split()
+    return " ".join([lemmatizer.lemmatize(word) for word in words])
+
+def stem(text):
+    """Perform stemming on text."""
+    words = text.split()
+    return " ".join([stemmer.stem(word) for word in words])
+
+def process_text(text):
+    """Perform full text processing: HTML removal, URL removal, stopwords removal, lemmatization, and stemming."""
+    if not text:
+        return ""
+    text = clean_html(text)
+    text = clean_urls(text)
+    text = remove_stopwords(text)
+    text = lemmatize(text)
+    text = stem(text)
+    return text
+
+# Register UDF
+process_text_udf = udf(process_text, StringType())
+
+# Apply text processing
+processed_df = df.withColumn("processed_text", process_text_udf(col("text")))
+
+# Save processed data
+processed_df.write.csv(output_path, header=True, mode="overwrite")
+
+# Stop Spark Session
+spark.stop()
+
+
+
