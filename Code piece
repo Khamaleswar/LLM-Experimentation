@@ -351,3 +351,62 @@ def spark_sql_nlp_pipeline():
         cluster_name=create_cluster_task.output,
     )
     delete_cluster_task.after(nlp_task)  # Ensure deletion happens after NLP task completes
+
+
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf, col
+import re
+from bs4 import BeautifulSoup
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer, WordNetLemmatizer
+from pyspark.sql.types import StringType
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("NLP Tasks").getOrCreate()
+
+# Define helper functions
+def remove_html(text):
+    return BeautifulSoup(text, "html.parser").get_text()
+
+def remove_urls(text):
+    return re.sub(r"http\S+|www.\S+", "", text)
+
+def remove_stopwords(text):
+    stop_words = set(stopwords.words("english"))
+    return " ".join([word for word in text.split() if word.lower() not in stop_words])
+
+def stem_text(text):
+    stemmer = PorterStemmer()
+    return " ".join([stemmer.stem(word) for word in text.split()])
+
+def lemmatize_text(text):
+    lemmatizer = WordNetLemmatizer()
+    return " ".join([lemmatizer.lemmatize(word) for word in text.split()])
+
+# Register UDFs
+remove_html_udf = udf(remove_html, StringType())
+remove_urls_udf = udf(remove_urls, StringType())
+remove_stopwords_udf = udf(remove_stopwords, StringType())
+stem_text_udf = udf(stem_text, StringType())
+lemmatize_text_udf = udf(lemmatize_text, StringType())
+
+# Input and output paths
+input_path = "gs://your-bucket/sql_output/result.csv"  # Replace with the input path
+output_path = "gs://your-bucket/nlp_output/processed_result.csv"  # Replace with the output path
+
+# Read input data
+df = spark.read.csv(input_path, header=True)
+
+# Apply NLP transformations
+df = df.withColumn("text_no_html", remove_html_udf(col("text_column")))
+df = df.withColumn("text_no_urls", remove_urls_udf(col("text_no_html")))
+df = df.withColumn("text_no_stopwords", remove_stopwords_udf(col("text_no_urls")))
+df = df.withColumn("stemmed_text", stem_text_udf(col("text_no_stopwords")))
+df = df.withColumn("lemmatized_text", lemmatize_text_udf(col("stemmed_text")))
+
+# Write the result back to GCS
+df.write.csv(output_path, header=True)
+
+
+
