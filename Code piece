@@ -300,4 +300,54 @@ from google_cloud_pipeline_components.v1.bigquery.query_job.component import big
 
 
 
+from kfp.v2.dsl import pipeline
+from google_cloud_pipeline_components.v1.dataproc import DataprocSparkSqlBatchOp, DataprocPySparkBatchOp
 
+@pipeline(name="dataproc-spark-sql-nlp-pipeline", pipeline_root="gs://your-bucket/pipeline-root")
+def spark_sql_nlp_pipeline():
+    # Step 1: Create a Dataproc cluster
+    create_cluster_task = create_dataproc_cluster(
+        project_id="your_project_id",
+        region="your_region",  # e.g., "us-central1"
+        cluster_name="example-cluster",
+    )
+
+    # Step 2: Run a Spark SQL batch job
+    spark_sql_task = DataprocSparkSqlBatchOp(
+        project="your_project_id",
+        location="your_region",
+        batch_id="spark-sql-batch",
+        batch={
+            "spark_sql_batch": {
+                "query_file_uri": "gs://your-bucket/sql/queries.sql",  # SQL script stored in GCS
+                "jar_file_uris": [],  # Optional additional JARs
+            },
+        },
+        cluster_name=create_cluster_task.output,  # Use the created cluster
+    )
+
+    # Step 3: Process data with a PySpark job (NLP tasks)
+    nlp_task = DataprocPySparkBatchOp(
+        project="your_project_id",
+        location="your_region",
+        batch_id="nlp-spark-job",
+        batch={
+            "pyspark_batch": {
+                "main_python_file_uri": "gs://your-bucket/pyspark/nlp_job.py",  # PySpark script
+                "args": [
+                    "--input_path", "gs://your-bucket/sql_output/result.csv",  # Output from Step 2
+                    "--output_path", "gs://your-bucket/nlp_output/processed_result.csv",
+                ],
+            },
+        },
+        cluster_name=create_cluster_task.output,  # Use the created cluster
+    )
+    nlp_task.after(spark_sql_task)  # Ensure it runs after the SQL job
+
+    # Step 4: Delete the Dataproc cluster after all jobs are completed
+    delete_cluster_task = delete_dataproc_cluster(
+        project_id="your_project_id",
+        region="your_region",
+        cluster_name=create_cluster_task.output,
+    )
+    delete_cluster_task.after(nlp_task)  # Ensure deletion happens after NLP task completes
