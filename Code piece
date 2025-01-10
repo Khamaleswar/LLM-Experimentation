@@ -1,0 +1,169 @@
+
+from kfp.v2 import compiler
+from kfp.v2.dsl import pipeline, component, Output, Dataset
+from google_cloud_pipeline_components.v1.dataproc import DataprocPySparkBatchOp, DataprocClusterCreateOp, DataprocClusterDeleteOp
+from google_cloud_pipeline_components.v1.bigquery import BigQueryQueryJobOp
+
+PROJECT_ID = 'your-project-id'
+REGION = 'your-region'
+BUCKET_NAME = 'your-gcs-bucket'
+CLUSTER_NAME = 'vertex-dataproc-cluster'
+PYSPARK_FILE_URI = 'gs://your-bucket/path-to-your-pyspark-job.py'
+
+@pipeline(name="vertex-ai-dataproc-pipeline", description="Pipeline with BigQuery and Dataproc integration")
+def dataproc_pipeline():
+    # Step 1: Fetch data from BigQuery
+    bigquery_query = BigQueryQueryJobOp(
+        query="""
+            SELECT * FROM `your-project-id.your-dataset.your-table`
+            LIMIT 1000
+        """,
+        project=PROJECT_ID,
+        location=REGION,
+        output_table=f"{PROJECT_ID}.temp_dataset.temp_table",  # Temporary BQ table for staging
+        write_disposition="WRITE_TRUNCATE"
+    )
+    
+    # Step 2: Save BigQuery output to GCS
+    bigquery_to_gcs = BigQueryQueryJobOp(
+        query=f"""
+            EXPORT DATA OPTIONS(
+                uri='gs://{BUCKET_NAME}/bigquery_output/*.csv',
+                format='CSV',
+                overwrite=true
+            ) AS
+            SELECT * FROM `{PROJECT_ID}.temp_dataset.temp_table`
+        """,
+        project=PROJECT_ID,
+        location=REGION
+    ).after(bigquery_query)
+    
+    # Step 3: Create a Dataproc cluster
+    create_cluster = DataprocClusterCreateOp(
+        project=PROJECT_ID,
+        region=REGION,
+        cluster_name=CLUSTER_NAME,
+        gcs_bucket=BUCKET_NAME,
+        cluster_config={
+            "master_config": {"num_instances": 1, "machine_type_uri": "n1-standard-4"},
+            "worker_config": {"num_instances": 2, "machine_type_uri": "n1-standard-4"},
+        }
+    ).after(bigquery_to_gcs)
+    
+    # Step 4: Submit PySpark job to Dataproc
+    pyspark_task = DataprocPySparkBatchOp(
+        project=PROJECT_ID,
+        location=REGION,
+        batch_id="pyspark-job",
+        main_python_file_uri=PYSPARK_FILE_URI,
+        cluster_name=create_cluster.output["cluster_name"],
+        args=[
+            f"gs://{BUCKET_NAME}/bigquery_output/*.csv",  # Input data path
+            f"gs://{BUCKET_NAME}/processed_output/"       # Output data path
+        ]
+    ).after(create_cluster)
+    
+    # Step 5: Delete the cluster after the job is complete
+    delete_cluster = DataprocClusterDeleteOp(
+        project=PROJECT_ID,
+        region=REGION,
+        cluster_name=create_cluster.output["cluster_name"]
+    ).after(pyspark_task)
+
+compiler.Compiler().compile(
+    pipeline_func=dataproc_pipeline,
+    package_path="vertex_ai_dataproc_with_bigquery_pipeline.json"
+)
+
+
+from google.cloud import aiplatform
+
+# Initialize Vertex AI
+aiplatform.init(project='your-project-id', location='your-region')
+
+# Trigger the pipeline
+job = aiplatform.PipelineJob(
+    display_name="vertex-ai-dataproc-pipeline",
+    template_path="vertex_ai_dataproc_with_bigquery_pipeline.json",
+    pipeline_root="gs://your-gcs-bucket/pipeline-root/",
+    parameter_values={}  # Add any parameters if needed
+)
+
+job.run()
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, udf
+from pyspark.sql.types import StringType
+from bs4 import BeautifulSoup
+import re
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer, PorterStemmer
+import nltk
+
+# Download NLTK resources
+nltk.download("stopwords")
+nltk.download("wordnet")
+
+# Initialize stopwords, lemmatizer, and stemmer
+stop_words = set(stopwords.words("english"))
+lemmatizer = WordNetLemmatizer()
+stemmer = PorterStemmer()
+
+# Initialize Spark Session
+spark = SparkSession.builder \
+    .appName("TextProcessing") \
+    .getOrCreate()
+
+# Input and output paths
+input_path = "gs://your-bucket/bigquery_output/*.csv"  # Input data fetched from BigQuery
+output_path = "gs://your-bucket/processed_output/"    # Processed output path
+
+# Load data
+df = spark.read.csv(input_path, header=True, inferSchema=True)
+
+# UDFs for text processing
+def clean_html(text):
+    """Remove HTML tags from text."""
+    return BeautifulSoup(text, "html.parser").get_text()
+
+def clean_urls(text):
+    """Remove URLs from text."""
+    return re.sub(r"http\S+|www\S+|https\S+", "", text, flags=re.MULTILINE)
+
+def remove_stopwords(text):
+    """Remove stopwords from text."""
+    words = text.split()
+    return " ".join([word for word in words if word.lower() not in stop_words])
+
+def lemmatize(text):
+    """Perform lemmatization on text."""
+    words = text.split()
+    return " ".join([lemmatizer.lemmatize(word) for word in words])
+
+def stem(text):
+    """Perform stemming on text."""
+    words = text.split()
+    return " ".join([stemmer.stem(word) for word in words])
+
+def process_text(text):
+    """Perform full text processing: HTML removal, URL removal, stopwords removal, lemmatization, and stemming."""
+    if not text:
+        return ""
+    text = clean_html(text)
+    text = clean_urls(text)
+    text = remove_stopwords(text)
+    text = lemmatize(text)
+    text = stem(text)
+    return text
+
+# Register UDF
+process_text_udf = udf(process_text, StringType())
+
+# Apply text processing
+processed_df = df.withColumn("processed_text", process_text_udf(col("text")))
+
+# Save processed data
+processed_df.write.csv(output_path, header=True, mode="overwrite")
+
+# Stop Spark Session
+spark.stop()
