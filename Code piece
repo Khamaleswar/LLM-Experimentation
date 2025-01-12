@@ -459,5 +459,151 @@ def bigquery_spark_pipeline():
 
 
 
+from kfp.v2.dsl import pipeline, component
+from kfp.v2.compiler import Compiler
+from google.cloud import dataproc_v1
+from google.cloud import aiplatform
+import time
+
+
+@component
+def create_dataproc_cluster(project: str, region: str, cluster_name: str):
+    """Creates a Dataproc cluster."""
+    cluster_client = dataproc_v1.ClusterControllerClient(client_options={"api_endpoint": f"{region}-dataproc.googleapis.com:443"})
+    cluster_config = {
+        "project_id": project,
+        "config": {
+            "gce_cluster_config": {
+                "zone_uri": f"{region}-b",  # Change to preferred zone
+            },
+            "master_config": {
+                "num_instances": 1,
+                "machine_type_uri": "n1-standard-4",
+            },
+            "worker_config": {
+                "num_instances": 2,
+                "machine_type_uri": "n1-standard-4",
+            },
+        },
+    }
+    operation = cluster_client.create_cluster(
+        request={"project_id": project, "region": region, "cluster": {"cluster_name": cluster_name, **cluster_config}}
+    )
+    result = operation.result()
+    print(f"Cluster created: {result.cluster_name}")
+
+
+@component
+def delete_dataproc_cluster(project: str, region: str, cluster_name: str):
+    """Deletes a Dataproc cluster."""
+    cluster_client = dataproc_v1.ClusterControllerClient(client_options={"api_endpoint": f"{region}-dataproc.googleapis.com:443"})
+    operation = cluster_client.delete_cluster(
+        request={"project_id": project, "region": region, "cluster_name": cluster_name}
+    )
+    operation.result()
+    print(f"Cluster deleted: {cluster_name}")
+
+
+@pipeline(name="bigquery-spark-pipeline", pipeline_root="gs://your-bucket/pipeline-root")
+def bigquery_spark_pipeline():
+    project = "your_project_id"
+    region = "europe-west2"
+    cluster_name = f"bigquery-spark-cluster-{int(time.time())}"  # Unique cluster name
+
+    # Step 1: Create a Dataproc cluster
+    create_cluster_task = create_dataproc_cluster(project=project, region=region, cluster_name=cluster_name)
+
+    # Step 2: Submit the PySpark job
+    pyspark_job_task = DataprocPySparkBatchOp(
+        project=project,
+        location=region,
+        batch_id="bigquery-spark-job",
+        batch={
+            "pyspark_batch": {
+                "main_python_file_uri": "gs://your-bucket/pyspark/bigquery_spark_job.py",
+            },
+        },
+        cluster_name=cluster_name,
+    )
+    pyspark_job_task.after(create_cluster_task)
+
+    # Step 3: Delete the Dataproc cluster after the job is complete
+    delete_cluster_task = delete_dataproc_cluster(project=project, region=region, cluster_name=cluster_name)
+    delete_cluster_task.after(pyspark_job_task)
+
+
+# Compile the pipeline
+Compiler().compile(
+    pipeline_func=bigquery_spark_pipeline,
+    package_path="bigquery_spark_pipeline.json"
+)
+
+# Submit the pipeline to Vertex AI
+aiplatform.init(project="your_project_id", location="europe-west2")
+
+pipeline_job = aiplatform.PipelineJob(
+    display_name="bigquery-spark-pipeline",
+    template_path="bigquery_spark_pipeline.json",
+)
+
+pipeline_job.run(sync=True)
+
+
+from google.cloud import dataproc_v1
+
+# Initialize the client with the correct endpoint
+region = "europe-west2"
+client = dataproc_v1.ClusterControllerClient(
+    client_options={"api_endpoint": f"{region}-dataproc.googleapis.com:443"}
+)
+
+# Project and cluster details
+project_id = "your_project_id"
+cluster_name = "example-cluster"
+zone = f"{region}-b"  # Adjust the zone as needed
+
+# Cluster configuration
+cluster_config = {
+    "project_id": project_id,
+    "cluster_name": cluster_name,
+    "config": {
+        "gce_cluster_config": {
+            "zone_uri": zone,
+        },
+        "master_config": {
+            "num_instances": 1,
+            "machine_type_uri": "n1-standard-4",
+        },
+        "worker_config": {
+            "num_instances": 2,
+            "machine_type_uri": "n1-standard-4",
+        },
+    },
+}
+
+# Create the cluster
+operation = client.create_cluster(
+    request={"project_id": project_id, "region": region, "cluster": cluster_config}
+)
+cluster = operation.result()
+print(f"Cluster created: {cluster.cluster_name}")
+
+# Delete the cluster
+delete_operation = client.delete_cluster(
+    request={"project_id": project_id, "region": region, "cluster_name": cluster_name}
+)
+delete_operation.result()
+print(f"Cluster deleted: {cluster_name}")
+
+
+try:
+    client = dataproc_v1.ClusterControllerClient(
+        client_options={"api_endpoint": "europe-west2-dataproc.googleapis.com:443"}
+    )
+    print("Client initialized successfully!")
+except Exception as e:
+    print(f"Failed to initialize client: {e}")
+
+
 
  
