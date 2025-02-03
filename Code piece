@@ -904,5 +904,22 @@ dataproc_pyspark_op = DataprocPySparkBatchOp(
     container_image="gcr.io/your-project-id/pyspark-image:latest",  # Your custom container with PySpark
 )
 
+from pyspark.sql import SparkSession
+
+# Initialize Spark Session
+spark = SparkSession.builder.appName("BQ_to_GCS").getOrCreate()
+
+# Define BigQuery and GCS details
+bq_table = "your_project.dataset.your_table"
+gcs_output_path = "gs://your_bucket/bq_data"
+
+# Load data from BigQuery
+df = spark.read.format("bigquery").option("table", bq_table).load()
+
+# Save to GCS in Parquet format
+df.write.mode("overwrite").parquet(gcs_output_path)
+
+print(f"Data saved to {gcs_output_path}")
+spark.stop()
 
 
