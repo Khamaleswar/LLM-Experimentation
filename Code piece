@@ -923,3 +923,28 @@ print(f"Data saved to {gcs_output_path}")
 spark.stop()
 
 
+from pyspark.sql import SparkSession
+from pyspark.ml.feature import Tokenizer, StopWordsRemover
+
+# Initialize Spark
+spark = SparkSession.builder.appName("NLP_Processing").getOrCreate()
+
+# GCS Input & Output Paths
+input_path = "gs://your_bucket/bq_data"
+output_path = "gs://your_bucket/nlp_data"
+
+# Load Data
+df = spark.read.parquet(input_path)
+
+# NLP Processing: Tokenization & Stopword Removal
+tokenizer = Tokenizer(inputCol="text_column", outputCol="words")
+df = tokenizer.transform(df)
+
+remover = StopWordsRemover(inputCol="words", outputCol="filtered_words")
+df = remover.transform(df)
+
+# Save Transformed Data
+df.write.mode("overwrite").parquet(output_path)
+
+print(f"NLP Transformed Data saved to {output_path}")
+spark.stop()
