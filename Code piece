@@ -999,3 +999,17 @@ operation = client.create_batch(
 # Wait for the job to complete
 operation.result()
 print(f"Batch job {batch_id} submitted successfully!")
+
+
+
+query = """
+    SELECT * FROM `your_project.your_dataset.your_table`
+    WHERE RAND() < 0.1
+    LIMIT 100
+"""
+
+df = spark.read.format("bigquery") \
+    .option("query", query) \
+    .load()
+
+df.show()
