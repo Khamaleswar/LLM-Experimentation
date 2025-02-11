@@ -1013,3 +1013,18 @@ df = spark.read.format("bigquery") \
     .load()
 
 df.show()
+
+
+from pyspark.sql.functions import col
+
+df = df.withColumn("Recipient", col("Recipient").cast("string"))
+
+from pyspark.sql.functions import col, from_json
+from pyspark.sql.types import StringType, ArrayType, StructType, StructField
+
+# Define the schema (assuming the data contains a list of strings)
+schema = ArrayType(StringType()) 
+
+# Apply the transformation
+df = df.withColumn("Recipient", from_json(col("Recipient"), schema))
+df = df.withColumn("Message", from_json(col("Message"), schema))
