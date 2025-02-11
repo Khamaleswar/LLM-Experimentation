@@ -1028,3 +1028,49 @@ schema = ArrayType(StringType())
 # Apply the transformation
 df = df.withColumn("Recipient", from_json(col("Recipient"), schema))
 df = df.withColumn("Message", from_json(col("Message"), schema))
+
+from pyspark.sql.functions import col
+
+df = (
+    df.withColumn("Message", col("Message").cast("string"))
+      .withColumn("all_names", col("all_names").cast("string"))
+      .withColumn("Lexicon_LineNo", col("Lexicon_LineNo").cast("string"))
+      .withColumn("Expanded_hit", col("Expanded_hit").cast("string"))
+)
+
+
+
+
+
+from pyspark.sql.functions import col, when, udf
+from pyspark.sql.types import StringType, ArrayType, IntegerType
+
+# Define UDFs for transformations
+html_remover_lex_udf = udf(html_remover_lex, StringType())
+url_remover_udf = udf(url_remover, StringType())
+text_cleaning_lex_udf = udf(text_cleaning_lex, StringType())
+chat_expander_udf = udf(chat_expander, StringType())
+name_finder_udf = udf(lambda sender, recipient, message, expanded_msg: 
+                      name_finder(sender, recipient, message, expanded_msg), StringType())
+lex_line_udf = udf(lambda expanded_msg, lex_cleaned: 
+                   lex_line(expanded_msg, lex_cleaned), ArrayType(StringType()))
+lex_based_counter_udf = udf(lambda expanded_msg, lex_line_no: 
+                            lex_based_counter(expanded_msg, lex_line_no), IntegerType())
+
+# Apply transformations
+df = df.withColumn("Csurv_Lexicon_html_removed", html_remover_lex_udf(col("Csurv_Lexicon")))
+df = df.withColumn("Csurv_Lexicon_url_removed", url_remover_udf(col("Csurv_Lexicon_html_removed")))
+df = df.withColumn("Csurv_Lexicon_cleaned", text_cleaning_lex_udf(col("Csurv_Lexicon_url_removed")))
+
+df = df.withColumn("Expanded_Message", chat_expander_udf(col("Message")))
+
+df = df.withColumn("all_names", name_finder_udf(col("Sender"), col("Recipient"), col("Message"), col("Expanded_Message")))
+
+df = df.withColumn("Lexicon_LineNo", lex_line_udf(col("Expanded_Message"), col("Csurv_Lexicon_cleaned")))
+
+df = df.withColumn("Expanded_hit", lex_based_counter_udf(col("Expanded_Message"), col("Lexicon_LineNo")))
+
+df = df.withColumn("Match_Indicator", when(col("Lexicon_LineNo").isNotNull() & (col("Lexicon_LineNo") != ""), 1).otherwise(0))
+
+
+df = df.filter(col("KI_Name").isin(["GMM01", "I001", "IIRS01"]))
