@@ -1074,3 +1074,139 @@ df = df.withColumn("Match_Indicator", when(col("Lexicon_LineNo").isNotNull() & (
 
 
 df = df.filter(col("KI_Name").isin(["GMM01", "I001", "IIRS01"]))
+
+
+
+
+
+
+from google.cloud import aiplatform
+
+job = aiplatform.CustomJob(
+    display_name="gpu-training-job",
+    worker_pool_specs=[
+        {
+            "machine_spec": {
+                "machine_type": "n1-standard-4",  # Adjust machine type as needed
+                "accelerator_type": "NVIDIA_TESLA_T4",  # Change based on available GPU
+                "accelerator_count": 1,  # Number of GPUs
+            },
+            "replica_count": 1,
+            "container_spec": {
+                "image_uri": "gcr.io/your-project-id/your-image",  # Your Docker image with dependencies
+            },
+        }
+    ],
+)
+
+job.run()
+
+
+
+from kfp.v2.dsl import component, pipeline
+
+@component(base_image="python:3.8")
+def train_model():
+    import tensorflow as tf
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+@pipeline(name="gpu-pipeline")
+def pipeline():
+    train_model().set_cpu_limit("4").set_memory_limit("16G").set_gpu_limit(1)
+
+
+from kfp.v2.dsl import component, pipeline
+
+@component(base_image="nvidia/cuda:11.2.2-runtime-ubuntu20.04")  # Ensure CUDA support
+def train_model():
+    import tensorflow as tf
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+@pipeline(name="gpu-pipeline")
+def pipeline():
+    train_model().set_cpu_limit("4").set_memory_limit("16G").set_gpu_limit(1)
+
+
+from kfp.v2 import compiler
+from google.cloud import aiplatform
+
+compiler.Compiler().compile(pipeline_func=pipeline, package_path="gpu_pipeline.json")
+
+job = aiplatform.PipelineJob(
+    display_name="gpu-test-pipeline",
+    template_path="gpu_pipeline.json",
+    enable_caching=False,
+    pipeline_root="gs://your-bucket/pipeline-root",
+)
+
+job.run(service_account="your-service-account@your-project.iam.gserviceaccount.com")
+
+
+
+@component(base_image="nvidia/cuda:11.2.2-runtime-ubuntu20.04")
+def debug_gpu():
+    import tensorflow as tf
+    import torch
+    
+    print("TensorFlow GPUs:", tf.config.list_physical_devices('GPU'))
+    print("PyTorch CUDA available:", torch.cuda.is_available())
+    print("PyTorch GPU count:", torch.cuda.device_count())
+
+@pipeline(name="gpu-debug-pipeline")
+def pipeline():
+    debug_gpu().set_gpu_limit(1)
+
+
+
+
+from kfp.v2.dsl import component, pipeline
+
+@component(base_image="nvidia/cuda:11.2.2-runtime-ubuntu20.04")  # Ensure CUDA support
+def train_model():
+    import tensorflow as tf
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
+
+    # Enable memory growth for all GPUs
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+
+    # Use all GPUs with MirroredStrategy
+    strategy = tf.distribute.MirroredStrategy()
+    with strategy.scope():
+        # Example: Perform matrix multiplication on multiple GPUs
+        a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+        b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
+        c = tf.matmul(a, b)
+        print("Matrix multiplication result on multiple GPUs:", c.numpy())
+
+@pipeline(name="multi-gpu-pipeline")
+def pipeline():
+    train_model().set_cpu_limit("4").set_memory_limit("16G").set_gpu_limit(2)  # Adjust GPU limit based on availability
+
+
+from kfp.v2 import compiler
+from google.cloud import aiplatform
+
+compiler.Compiler().compile(pipeline_func=pipeline, package_path="multi_gpu_pipeline.json")
+
+job = aiplatform.PipelineJob(
+    display_name="multi-gpu-test-pipeline",
+    template_path="multi_gpu_pipeline.json",
+    enable_caching=False,
+    pipeline_root="gs://your-bucket/pipeline-root",
+)
+
+job.run(service_account="your-service-account@your-project.iam.gserviceaccount.com")
+
+
+
+gpu_devices = tf.config.list_physical_devices('GPU')
+for i, gpu in enumerate(gpu_devices):
+    with tf.device(f'/GPU:{i}'):
+        # Example computation on each GPU
+        a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+        b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
+        c = tf.matmul(a, b)
+        print(f"GPU {i} computation result:", c.numpy())
