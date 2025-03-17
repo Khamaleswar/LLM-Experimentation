@@ -1210,3 +1210,159 @@ for i, gpu in enumerate(gpu_devices):
         b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
         c = tf.matmul(a, b)
         print(f"GPU {i} computation result:", c.numpy())
+
+
+
+import argparse
+import pandas as pd
+import joblib
+import json
+from google.cloud import storage
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_auc_score
+
+def load_data_from_gcs(gcs_path):
+    """Loads a CSV file from Google Cloud Storage into a Pandas DataFrame."""
+    storage_client = storage.Client()
+    bucket_name, file_path = gcs_path.replace("gs://", "").split("/", 1)
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_path)
+
+    df = pd.read_csv(blob.open("r"))
+    return df
+
+def train_and_evaluate(train_data_path, target_column, n_estimators, max_depth, min_samples_split, min_samples_leaf):
+    """Trains and evaluates a Random Forest model with given hyperparameters."""
+    
+    df = load_data_from_gcs(train_data_path)
+    
+    # Split into features and target
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+
+    # Train-Test Split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Train Model
+    model = RandomForestClassifier(
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,
+        random_state=42
+    )
+
+    model.fit(X_train, y_train)
+    y_pred_probs = model.predict_proba(X_test)[:, 1]
+    auc_score = roc_auc_score(y_test, y_pred_probs)
+
+    print(f"ROC AUC Score: {auc_score}")
+
+    # Save model if it's the best
+    joblib.dump(model, "model.pkl")
+
+    # Save best AUC
+    with open("metrics.json", "w") as f:
+        json.dump({"auc": auc_score}, f)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-data", type=str, required=True)
+    parser.add_argument("--target-column", type=str, required=True)
+    parser.add_argument("--n-estimators", type=int, required=True)
+    parser.add_argument("--max-depth", type=int, required=True)
+    parser.add_argument("--min-samples-split", type=int, required=True)
+    parser.add_argument("--min-samples-leaf", type=int, required=True)
+
+    args = parser.parse_args()
+
+    train_and_evaluate(
+        args.train_data,
+        args.target_column,
+        args.n_estimators,
+        args.max_depth,
+        args.min_samples_split,
+        args.min_samples_leaf
+    )
+
+
+import kfp
+from kfp.v2 import dsl
+from google_cloud_pipeline_components import aiplatform as gcc_aip
+
+# ---------------- CONFIG ----------------
+PROJECT_ID = "your-gcp-project-id"
+REGION = "us-central1"
+BUCKET_NAME = "your-gcs-bucket"
+TRAINING_DATA = f"gs://{BUCKET_NAME}/data/dataset.csv"
+IMAGE_URI = "us-docker.pkg.dev/vertex-ai/training/scikit-learn-cpu.0-23:latest"
+
+@dsl.pipeline(
+    name="rf-hyperparam-tuning-pipeline",
+    pipeline_root=f"gs://{BUCKET_NAME}/pipeline-root"
+)
+def rf_hyperparam_tuning_pipeline():
+    """Vertex AI Pipeline for Random Forest Hyperparameter Tuning."""
+
+    hp_tuning_task = gcc_aip.HyperparameterTuningJobRunOp(
+        display_name="rf-hyperparam-tuning",
+        project=PROJECT_ID,
+        location=REGION,
+        custom_job=gcc_aip.CustomJob(
+            display_name="rf-training-job",
+            worker_pool_specs=[
+                {
+                    "machine_spec": {"machine_type": "n1-standard-4"},
+                    "replica_count": 1,
+                    "container_spec": {
+                        "image_uri": IMAGE_URI,
+                        "command": ["python3", "-m", "trainer.task"],
+                        "args": [
+                            "--train-data", TRAINING_DATA,
+                            "--target-column", "target",
+                            "--n-estimators", "{n_estimators}",
+                            "--max-depth", "{max_depth}",
+                            "--min-samples-split", "{min_samples_split}",
+                            "--min-samples-leaf", "{min_samples_leaf}"
+                        ],
+                    },
+                }
+            ],
+        ),
+        metric_spec={"auc": "maximize"},
+        parameter_spec={
+            "n_estimators": gcc_aip.IntegerParameterSpec(min=50, max=500, scale="linear"),
+            "max_depth": gcc_aip.IntegerParameterSpec(min=3, max=20, scale="linear"),
+            "min_samples_split": gcc_aip.IntegerParameterSpec(min=2, max=10, scale="linear"),
+            "min_samples_leaf": gcc_aip.IntegerParameterSpec(min=1, max=5, scale="linear"),
+        },
+        max_trial_count=10,
+        parallel_trial_count=2,
+    )
+
+# ---------------- COMPILE PIPELINE ----------------
+if __name__ == "__main__":
+    from kfp.v2 import compiler
+    compiler.Compiler().compile(
+        pipeline_func=rf_hyperparam_tuning_pipeline,
+        package_path="rf_hyperparam_tuning_pipeline.json"
+    )
+
+
+
+
+from google.cloud import aiplatform
+
+PROJECT_ID = "your-gcp-project-id"
+REGION = "us-central1"
+
+aiplatform.init(project=PROJECT_ID, location=REGION)
+
+job = aiplatform.PipelineJob(
+    display_name="rf-hyperparam-tuning-pipeline",
+    template_path="rf_hyperparam_tuning_pipeline.json",
+    pipeline_root=f"gs://{BUCKET_NAME}/pipeline-root",
+)
+
+job.run()
