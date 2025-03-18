@@ -1,3 +1,38 @@
+worker_pool_specs=[
+    {
+        "machine_spec": {
+            "machine_type": "n1-highmem-96"
+        },
+        "replica_count": 1,
+        "container_spec": {
+            "image_uri": "europe-west2-docker.pkg.dev/hsbc-244716-gecsai-prod/vertex-base-images-prod/training_base_ml:2.1.4",
+            "command": [
+                "python3",
+                "-c",
+                """
+                import os
+                from google.cloud import storage
+                
+                os.environ['N_ESTIMATORS'] = str(${trial.parameters.n_estimators})
+                os.environ['MAX_DEPTH'] = str(${trial.parameters.max_depth})
+                os.environ['MIN_SAMPLES_SPLIT'] = str(${trial.parameters.min_samples_split})
+                
+                client = storage.Client()
+                bucket = client.bucket('hsbc-244716-gecsai-prod-analytics-risk-detection')
+                blob = bucket.blob('Khamaleswar/Models/train_script_xgb.py')
+                blob.download_to_filename('/script.py')
+                
+                os.system('python3 /script.py --n_estimators=${N_ESTIMATORS} --max_depth=${MAX_DEPTH} --min_samples_split=${MIN_SAMPLES_SPLIT}')
+                """
+            ]
+        }
+    }
+]
+
+
+os.system('python3 /script.py --n_estimators=${N_ESTIMATORS} --max_depth=${MAX_DEPTH} --min_samples_split=${MIN_SAMPLES_SPLIT}')
+
+
 
 
 
