@@ -1,3 +1,37 @@
+"command": [
+    "python3",
+    "-c",
+    """
+import os
+from google.cloud import storage
+
+# Fetch hyperparameters passed from Vertex AI
+n_estimators = os.environ.get("N_ESTIMATORS")
+max_depth = os.environ.get("MAX_DEPTH")
+min_samples_split = os.environ.get("MIN_SAMPLES_SPLIT")
+
+# Debugging: Print the values to verify they are correctly passed
+print(f"Using hyperparameters: n_estimators={n_estimators}, max_depth={max_depth}, min_samples_split={min_samples_split}")
+
+# Download the training script from GCS
+client = storage.Client()
+bucket = client.bucket("hsbc-244716-gecsai-prod-analytics-risk-detection")
+blob = bucket.blob("Khamaleswar/Models/train_script_xgb.py")
+blob.download_to_filename("/script.py")
+
+# Run the script with hyperparameters
+os.system(f"python3 /script.py --n_estimators {n_estimators} --max_depth {max_depth} --min_samples_split {min_samples_split}")
+    """
+],
+"env": [
+    {"name": "N_ESTIMATORS", "value": "{{$.trial.parameters.n_estimators}}"},
+    {"name": "MAX_DEPTH", "value": "{{$.trial.parameters.max_depth}}"},
+    {"name": "MIN_SAMPLES_SPLIT", "value": "{{$.trial.parameters.min_samples_split}}"}
+]
+
+
+
+
 worker_pool_specs=[
     {
         "machine_spec": {
