@@ -1,3 +1,23 @@
+from google.cloud import aiplatform
+
+# Replace with your Project ID & Location
+project_id = "your_project_id"
+location = "your_region"
+
+# List tuning jobs
+tuning_jobs = aiplatform.HyperparameterTuningJob.list(
+    project=project_id, location=location
+)
+
+# Print results
+for job in tuning_jobs:
+    print(f"Job Name: {job.display_name}")
+    print(f"State: {job.state}")
+    print(f"Best trial parameters: {job.best_trial.parameters}")
+    print(f"Best ROC AUC: {job.best_trial.metrics['roc_auc']}")
+
+
+
 "command": [
     "python3",
     "-c",
