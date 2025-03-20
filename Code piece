@@ -1611,3 +1611,31 @@ custom_job = aip.CustomJob.from_local_script(
     staging_bucket="gs://hsbc-244716-gecsai-dev-mlops-tech-pipelines/pipeline_root/models",
     encryption_spec_key_name=PIPELINE_KMS_KEY,
 )
+
+
+
+import os
+
+# Read hyperparameters from environment variables
+n_estimators = int(os.getenv("N_ESTIMATORS", 100))  # Default: 100
+max_depth = int(os.getenv("MAX_DEPTH", 10))         # Default: 10
+learning_rate = float(os.getenv("LEARNING_RATE", 0.01))  # Default: 0.01
+
+print(f"Using n_estimators={n_estimators}, max_depth={max_depth}, learning_rate={learning_rate}")
+
+# Proceed with training...
+
+custom_job = aiplatform.CustomJob.from_local_script(
+    display_name="xgb-hyperparam-tuning",
+    script_path="train_script.py",  # Ensure this script is saved as train_script.py
+    container_uri=CONFIG["BASE_IMAGE"],
+    machine_type="n1-highmem-96",
+    staging_bucket="gs://hsbc-244716-gecsai-dev-mlops-tech-pipelines/pipeline_root/models",
+    encryption_spec_key_name=PIPELINE_KMS_KEY,
+    # Setting hyperparameters as environment variables
+    environment_variables={
+        "N_ESTIMATORS": "{{$.trial.parameters.n_estimators}}",
+        "MAX_DEPTH": "{{$.trial.parameters.max_depth}}",
+        "LEARNING_RATE": "{{$.trial.parameters.learning_rate}}"
+    },
+)
