@@ -1594,3 +1594,20 @@ joblib.dump(model, args.output_model)
     "--max_depth ${trial.parameters.max_depth} --min_samples_split ${trial.parameters.min_samples_split}')"
 ]
 
+
+
+
+custom_job = aip.CustomJob.from_local_script(
+    display_name="xgb-hyperparam-tuning",
+    script_path="train_script.py",
+    container_uri=config["BASE_IMAGE"],
+    args=[
+        "--n_estimators", "{{trial.parameters.n_estimators}}",
+        "--max_depth", "{{trial.parameters.max_depth}}",
+        "--learning_rate", "{{trial.parameters.learning_rate}}"
+    ],
+    requirements=["scikit-learn", "numpy", "pandas", "joblib", "google-cloud-aiplatform"],
+    machine_type="n1-highmem-96",
+    staging_bucket="gs://hsbc-244716-gecsai-dev-mlops-tech-pipelines/pipeline_root/models",
+    encryption_spec_key_name=PIPELINE_KMS_KEY,
+)
