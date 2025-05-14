@@ -1,1 +1,184 @@
 bsshag
+
+
+
+!python generate_data.py --num_examples 1000000
+import pandas as pd
+from google import genai
+import uuid
+import json
+import os
+import json
+import time
+from google import genai
+from google.genai.types import CreateBatchJobConfig, JobState, HttpOptions
+PROJECT_ID = "YOUR_PROJECT_ID"
+LOCATION = "us-central1"
+model = "gemini-2.0-flash-lite-001"
+
+bucket_name = "YOUR_BUCKET_NAME"
+csv_filename = "chat_dataset.csv"
+chunk_size = 200 
+Define the output schema needed
+
+response_schema=genai.types.Schema(
+        type = genai.types.Type.OBJECT,
+        properties = {
+            "response": genai.types.Schema(
+                type = genai.types.Type.ARRAY,
+                items = genai.types.Schema(
+                    type = genai.types.Type.OBJECT,
+                    properties = {
+                        "statement_id": genai.types.Schema(
+                            type = genai.types.Type.STRING,
+                        ),
+                        "language": genai.types.Schema(
+                            type = genai.types.Type.STRING,
+                        ),
+                    },
+                ),
+            ),
+        },
+    )
+Create the payload by chunking sentences into multiple requests
+
+import csv
+
+
+with open(csv_filename, 'r', newline='', encoding='utf-8') as csvfile:
+    reader = csv.DictReader(csvfile)
+    user_statements_parts = []
+    for row in reader:
+        # Extract id and chat_message from the row
+        statement_id = row['id']
+        chat_message = row['chat_message']
+        
+        # Format the user statement
+        formatted_statement = f"<user statement id={statement_id}>{chat_message}</user statement >"
+        user_statements_parts.append(formatted_statement)
+
+
+chunked_statements = [user_statements_parts[i:i + chunk_size] for i in range(0, len(user_statements_parts), chunk_size)]
+
+prompt = """
+You are multilingual expert. You need to respond with the language that the user statement is written in:
+"""
+
+os.remove('payload.jsonl')
+for chunk in chunked_statements:
+
+    full_prompt = prompt + "\n".join(chunk)
+    payload ={"id":str(uuid.uuid4()), "request":{"contents": [{"role": "user", "parts": [{"text": full_prompt}]}], 
+                                             "generationConfig": {"responseMimeType":"application/json","responseSchema":response_schema.to_json_dict()}
+                                             }}
+    
+    with open("payload.jsonl", 'a') as file:
+        file.write(json.dumps(payload, ensure_ascii=False)+'\n')
+Upload the payload to GCS and kick off the batch job
+
+from file_utils import upload_file_to_bucket
+
+upload_file_to_bucket(bucket_name, "payload.jsonl", "payload.jsonl")
+client = genai.Client(http_options=HttpOptions(api_version="v1"), vertexai=True, project=PROJECT_ID, location=LOCATION)
+
+output_uri = f"gs://{bucket_name}/output"
+
+# See the documentation: https://googleapis.github.io/python-genai/genai.html#genai.batches.Batches.create
+job = client.batches.create(
+    model=model,
+    # Source link: https://storage.cloud.google.com/cloud-samples-data/batch/prompt_for_batch_gemini_predict.jsonl
+    src=f"gs://{bucket_name}/payload.jsonl",
+    config=CreateBatchJobConfig(dest=output_uri),
+)
+print(f"Job name: {job.name}")
+print(f"Job state: {job.state}")
+
+# See the documentation: https://googleapis.github.io/python-genai/genai.html#genai.types.BatchJob
+completed_states = {
+    JobState.JOB_STATE_SUCCEEDED,
+    JobState.JOB_STATE_FAILED,
+    JobState.JOB_STATE_CANCELLED,
+    JobState.JOB_STATE_PAUSED,
+}
+
+while job.state not in completed_states:
+    time.sleep(30)
+    job = client.batches.get(name=job.name)
+    print(f"Job state: {job.state}")
+Once the job is done, load & process the results
+
+from file_utils import get_latest_folder
+
+latest = get_latest_folder(bucket_name, 'output')
+latest_output = f"{latest}predictions.jsonl"
+from file_utils import read_jsonl_from_bucket    
+
+result = read_jsonl_from_bucket(bucket_name, latest_output)
+i = 0
+predictions = []
+for res in result:
+    try:
+        preds = json.loads(res['response']['candidates'][0]['content']['parts'][0]["text"])['response']
+        predictions.extend(preds)
+    except Exception as e:
+        print(e)
+    
+predictions_df = pd.DataFrame(predictions)
+predictions_df = predictions_df.rename(columns={"language":"predicted_language", "statement_id":"id"}).astype(str)
+
+groundtruth_df = pd.read_csv("chat_dataset.csv").astype(str)
+
+merged_df = groundtruth_df.merge(predictions_df, how="left", on="id")
+merged_df.head()
+We can also get the total number of tokens in/out used from the metadata and calculate accurately the cost of the job
+
+prompt_tokens = 0
+output_tokens = 0
+
+input_cost_per_token = 0.075 / 10**6
+output_cost_per_token = 0.30 / 10**6
+
+for res in result:
+    prompt_tokens += res['response']['usageMetadata']['candidatesTokenCount']
+    output_tokens += res['response']['usageMetadata']['promptTokenCount']
+
+total_price = prompt_tokens*input_cost_per_token+output_tokens*output_cost_per_token
+print(f"Total cost for {prompt_tokens} input tokens and {output_tokens} output tokens is {total_price}$")
+print(f"Total cost with batch api: {total_price/2}$")
+
+
+print(f"extrapolating to 10M messaged that would mean: {total_price/2 /len(predictions) * 10**7}$")
+(optional) Display top languages in the dataset
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+language_counts_all = merged_df['predicted_language'].value_counts()
+top_n = 15
+
+if language_counts_all.empty:
+    print("The 'predicted_language' column is empty or contains no data.")
+else:
+    if top_n and top_n > 0 and top_n < len(language_counts_all):
+        language_counts_to_plot = language_counts_all.nlargest(top_n)
+        chart_title = f'Top {top_n} Predicted Languages'
+    else:
+        language_counts_to_plot = language_counts_all
+        chart_title = 'Distribution of All Predicted Languages'
+
+    plt.figure(figsize=(12, 7))
+
+    plot = sns.barplot(x=language_counts_to_plot.index, y=language_counts_to_plot.values, palette="viridis", order=language_counts_to_plot.index)
+
+    for bar in plot.patches:
+        plot.annotate(format(bar.get_height(), '.0f'), 
+                        (bar.get_x() + bar.get_width() / 2., bar.get_height()),
+                        ha = 'center', va = 'center',
+                        size=10, xytext = (0, 8),
+                        textcoords = 'offset points')
+
+    plt.title(chart_title, fontsize=16)
+    plt.xlabel('Language', fontsize=14)
+    plt.ylabel('Number of Predictions', fontsize=14)
+    plt.xticks(rotation=45, ha="right") 
+    plt.tight_layout()
