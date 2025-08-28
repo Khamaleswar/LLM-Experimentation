@@ -1,3 +1,71 @@
+import os
+from email.message import EmailMessage
+from google import genai
+
+# 1. Initialize Gemini client (ensure GOOGLE_API_KEY is set in environment)
+client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+# 2. Your raw email thread (replace with actual chain text)
+raw_email_thread = """
+From: Alice <alice@example.com>
+Date: Mon, 26 Aug 2024 10:12:00 +0530
+Subject: Project Update
+
+Hi team, here's the update for the project...
+
+---
+From: Bob <bob@example.com>
+Date: Sun, 25 Aug 2024 17:30:00 +0530
+Subject: Re: Project Update
+
+Thanks Alice. We will review and respond soon.
+"""
+
+# 3. Ask Gemini to structure the email thread into JSON
+prompt = f"""
+The following text is a chain of emails. Extract each email in chronological order as JSON with fields:
+[from, to (if present), subject, date, body].
+Return ONLY valid JSON.
+
+Email thread:
+{raw_email_thread}
+"""
+
+response = client.models.generate_content(
+    model="gemini-1.5-flash",  # or gemini-1.5-pro if you need higher accuracy
+    contents=prompt
+)
+
+# 4. Parse Gemini's JSON output
+import json
+
+try:
+    emails_data = json.loads(response.text)
+except json.JSONDecodeError:
+    raise ValueError("Gemini output was not valid JSON:\n" + response.text)
+
+# 5. Build .eml files from structured data
+for i, email_info in enumerate(emails_data, start=1):
+    msg = EmailMessage()
+    msg["From"] = email_info.get("from", "")
+    if "to" in email_info:
+        msg["To"] = email_info["to"]
+    msg["Subject"] = email_info.get("subject", "")
+    msg["Date"] = email_info.get("date", "")
+    msg.set_content(email_info.get("body", ""))
+
+    # Save as .eml
+    filename = f"email_{i}.eml"
+    with open(filename, "wb") as f:
+        f.write(bytes(msg))
+    print(f"Saved {filename}")
+
+
+
+
+
+
+
 from google.cloud import aiplatform
 
 # Replace with your Project ID & Location
