@@ -1,3 +1,67 @@
+# Read from Excel
+matrix = pd.read_excel("scores.xlsx", sheet_name="Sheet1", usecols="C:K")  # adjust range
+
+sample_counts = {}
+for risk_idx, row in matrix.iterrows():
+    risk_scenario = risk_idx + 1  # or use an actual column if present
+    for score in range(1, 6):
+        n = row.get(score, 0)
+        sample_counts[(risk_scenario, score)] = int(n)
+
+
+import pandas as pd
+
+# Example DataFrame (replace this with your real one)
+df = pd.DataFrame({
+    'prediction_score': [1, 2, 3, 4, 5] * 1000,
+    'risk_scenario': sum([[i]*1000 for i in range(1, 13)], [])
+})
+
+# Example sample counts matrix similar to your Excel
+# (You can read these directly from Excel later)
+sample_counts = {
+    # (risk_scenario, prediction_score): samples_to_select
+    (1, 5): 5,
+    (2, 5): 32,
+    (3, 5): 56,
+    (4, 5): 66,
+    (5, 5): 107,
+    (6, 5): 14,
+    (7, 5): 24,
+    (8, 5): 3,
+    (9, 5): 3,
+    (10, 5): 0,
+    (11, 5): 0,
+    (12, 5): 0
+}
+
+# Perform stratified sampling based on both columns
+samples = []
+
+for (risk, score), n in sample_counts.items():
+    if n > 0:
+        subset = df[(df['risk_scenario'] == risk) &
+                    (df['prediction_score'] == score)]
+        if not subset.empty:
+            sampled_rows = subset.sample(n=min(n, len(subset)), random_state=42)
+            samples.append(sampled_rows)
+
+# Combine all sampled subsets
+sampled_df = pd.concat(samples, ignore_index=True)
+
+print(f"Total samples selected: {len(sampled_df)}")
+print(sampled_df.head())
+
+
+
+
+
+
+
+
+
+
+
 import os
 from email.message import EmailMessage
 from google import genai
