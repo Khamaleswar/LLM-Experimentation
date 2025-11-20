@@ -1,3 +1,44 @@
+def resolve_flags_and_dedupe(df):
+    # 1️⃣ Define all flags that invalidate plain "A"
+    invalid_flags = [
+        'M', 'S', 'A?', 
+        'M & A', 'M & S', 'S & A',
+        'M & S & A', 'M & S & A?', 'S & A?', 
+        '<no match>'
+    ]
+
+    # 2️⃣ Identify all IDs that contain ANY invalid flag
+    ids_to_exclude_A = df[df['Flag'].isin(invalid_flags)]['Csurv_Message_ID'].unique()
+
+    # 3️⃣ Create the final flag (A only when valid)
+    df['FinalFlag'] = df.apply(
+        lambda row: 'A'
+            if (row['Csurv_Message_ID'] not in ids_to_exclude_A 
+                and row['Flag'] == 'A')
+            else 'others',
+        axis=1
+    )
+
+    # 4️⃣ Priority for dedupe (A must come first)
+    df['priority'] = df['FinalFlag'].map({'A': 1, 'others': 2})
+
+    # 5️⃣ Sort by priority → ensures correct record kept
+    df = df.sort_values(by=['Csurv_Message_ID', 'priority'])
+
+    # 6️⃣ Drop duplicates based on ID
+    df_unique = df.drop_duplicates(subset="Csurv_Message_ID", keep="first")
+
+    # 7️⃣ Clean up helper column
+    df_unique = df_unique.drop(columns=['priority'])
+
+    return df_unique
+
+
+
+
+
+
+
 # Read from Excel
 matrix = pd.read_excel("scores.xlsx", sheet_name="Sheet1", usecols="C:K")  # adjust range
 
