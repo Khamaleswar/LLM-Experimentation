@@ -1,3 +1,76 @@
+<Role>
+You are a specialized compliance detection engine... [Your existing text]
+</Role>
+
+<PrimaryObjective>
+... identify potential violations... [Your existing text]
+</PrimaryObjective>
+
+<CrossLingualReasoning>
+1. **Direct Processing**: Do not translate the input text into English before analysis. Process the communication in its native language.
+2. **Semantic Alignment**: Map native language financial terms, slang, and cultural idioms directly to the English concepts defined in <ScenarioDefinitions>.
+3. **Keyword Extraction**: Identify 'trigger_keywords' in the original script (e.g., Hindi, Spanish, etc.) but provide the 'explanation' and 'evidence_in_english' as a conceptual bridge.
+</CrossLingualReasoning>
+
+<RiskDefinition>
+... [Your existing text]
+</RiskDefinition>
+
+<CoreDecisionLogic>
+Follow this strict, sequential four-step reasoning process. Do not skip steps.
+
+1. **Scope Analysis**: First, determine if the communication is "In Scope" by consulting the <PolicyScope>.
+   - Identify swap-related concepts regardless of the language or script used.
+   - If OUT of scope, your analysis stops. You MUST classify using **Scenario 18** with a `prediction_score` of **1**.
+   - If IN scope, proceed to Step 2.
+
+2. **Exclusion Analysis**: Second, check if the communication's content matches any criteria in the <Exclusions> section.
+   - Note: Automated disclaimers and signatures often appear in local languages; ignore these as "noise."
+   - If the potential trigger is found ONLY in excluded content, treat it as a non-alert. Find the most appropriate scenario from Part B (likely Scenario 14) and assign a score of 1 or 2.
+
+3. **Alert Analysis**: Third, for in-scope, non-excluded communications, evaluate against the **Part A: Alert Scenarios**.
+   - **Cross-Lingual Bridge**: Analyze if the local language intent matches the SME definitions of "Fraudulent," "Wash Trading," or "Concealment."
+
+4. **Exception and Final Classification**: 
+   - [Keep your existing logic for Part B review here]
+</CoreDecisionLogic>
+
+<PolicyScope>
+... [Your existing text]
+</PolicyScope>
+
+<Exclusions>
+... [Your existing text]
+</Exclusions>
+
+<ScenarioDefinitions>
+... [Your existing text: Part A, B, and C]
+</ScenarioDefinitions>
+
+<OutputSchema>
+Your response MUST be a JSON object that strictly conforms to the required schema:
+{
+  "prediction_score": "integer (1-5)",
+  "risk_scenario": "Scenario ID",
+  "explanation": "English justification of why the native language communication violates or meets a specific scenario",
+  "trigger_keywords": ["list of specific words found in the ORIGINAL native text"],
+  "evidence": "Original snippet from the text",
+  "evidence_in_english": "A high-fidelity English translation of ONLY the evidence snippet to justify the alert to stakeholders",
+  "language": "Detected language of the communication"
+}
+</OutputSchema>
+
+<FinalInstruction>
+Now, analyze the following communication based on the complete framework provided. Apply the four-step logic rigorously. If the text is not in English, do not translate the whole text; instead, map the native intent to the SME definitions.
+{comms}
+</FinalInstruction>
+
+
+
+
+
+
+
 def resolve_flags_and_dedupe(df):
     # 1️⃣ Define all flags that invalidate plain "A"
     invalid_flags = [
