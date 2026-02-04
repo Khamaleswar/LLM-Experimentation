@@ -1,3 +1,102 @@
+# Use the schema defined in your last image for BigQuery
+schema_for_bq = {
+    'fields': [
+        {'name': 'alert_flag', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'risk_scenario', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+        {'name': 'explanation', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'trigger_keywords', 'type': 'STRING', 'mode': 'REPEATED'},
+        {'name': 'evidence', 'type': 'STRING', 'mode': 'NULLABLE'},
+        {'name': 'language', 'type': 'STRING', 'mode': 'NULLABLE'},
+    ]
+}
+
+results = (
+    batched_call_pipeline
+    | "Read from BigQuery" >> beam.io.ReadFromBigQuery(query=query, use_standard_sql=True)
+    | "Gemini inference batched" >> RunInference(model_handler=CallGeminiBatch(risk_assessment_schema))
+    | "WriteToBQ" >> beam.io.WriteToBigQuery(
+        table=OUTPUT_TABLE,
+        schema=schema_for_bq,
+        create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND
+    )
+)
+
+import json
+import apache_beam as beam
+from google.genai import types
+
+# --- 1. GLOBAL SCHEMA DEFINITION ---
+# Defining it here makes it accessible and serializable
+RISK_ASSESSMENT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "alert_flag": {"type": "STRING", "description": "Prediction flag"},
+        "risk_scenario": {"type": "INTEGER", "description": "Scenario ID"},
+        "explanation": {"type": "STRING", "description": "Rationale"},
+        "trigger_keywords": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "evidence": {"type": "STRING"},
+        "language": {"type": "STRING"}
+    },
+    "required": ["alert_flag", "risk_scenario", "explanation", "trigger_keywords", "evidence", "language"]
+}
+
+# --- 2. UPDATED MODEL HANDLER ---
+class CallGeminiBatch(RemoteModelHandler):
+    def __init__(self, schema):
+        super().__init__(namespace="CallGeminiBatched")
+        self.model_name = "gemini-2.0-flash" # Use your specific model
+        self.prompt = "Does following message sound suspicious?"
+        # Store the schema in the instance
+        self.schema = schema
+
+    def _call_one(self, model, row):
+        message = row["Message"]
+        
+        # Configure the call with the schema
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=self.schema,
+        )
+
+        response = model.models.generate_content(
+            model=self.model_name,
+            contents=[self.prompt, message],
+            config=config
+        )
+
+        # Parse the JSON string into a Python Dict
+        try:
+            return json.loads(response.text)
+        except:
+            return {"error": "JSON parse failed", "raw": response.text}
+
+    # ... rest of your class methods (create_client, request) ...
+
+# --- 3. PIPELINE USAGE ---
+# When you call your pipeline, pass the global schema in
+# results = (
+#    ... 
+#    | "Gemini inference batched" >> RunInference(
+#          model_handler=CallGeminiBatch(RISK_ASSESSMENT_SCHEMA)
+#      )
+#    ...
+# )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 <Role>
 You are a specialized compliance detection engine... [Your existing text]
 </Role>
