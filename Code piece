@@ -1,3 +1,122 @@
+def transform_row_to_comms(row):
+    """Your specific parsing logic from the image"""
+    # Using your exact logic: Platform, Subject, Senders, Recipients, Raw communication
+    formatted_msg = (
+        f"Platform: {row['Csurv_Platform']}\n"
+        f"Subject: {row['Subject'].strip()}\n"
+        f"Senders: {row['Sender']}\n"
+        f"Recipients: {row['Recipient']}\n"
+        f"Raw communication:\n"
+        f"{row['Message'].strip()}"
+    )
+    # Return a dictionary that your Gemini class expects
+    return {"Message": formatted_msg}
+
+# Inside your main pipeline:
+results = (
+    batched_call_pipeline
+    | "Read from BigQuery" >> beam.io.ReadFromBigQuery(query=query, use_standard_sql=True)
+    
+    # --- ADD THIS STEP HERE ---
+    | "Format Prompt Input" >> beam.Map(transform_row_to_comms) 
+    
+    | "Gemini inference batched" >> RunInference(
+          model_handler=CallGeminiBatch(RISK_ASSESSMENT_SCHEMA)
+      )
+    | "WriteToBQ" >> beam.io.WriteToBigQuery(...)
+)
+
+
+
+
+
+def create_options():
+    options = PipelineOptions()
+    # ... other configurations (project, region, etc.)
+    
+    worker_options = options.view_as(WorkerOptions)
+    
+    # 1. THROUGHPUT_BASED allows Dataflow to scale up/down based on the workload
+    worker_options.autoscaling_algorithm = "THROUGHPUT_BASED" 
+    
+    # 2. Start with a small number to avoid hitting quota immediately
+    worker_options.num_workers = 2 
+    
+    # 3. SET THIS CAREFULLY: 
+    # If your Gemini quota is 60 RPM, and each worker process handles ~10 requests/min, 
+    # setting this to 5 or 6 is safer than 50.
+    worker_options.max_num_workers = 10 
+    
+    return options
+
+
+
+
+
+
+import time
+import random
+
+# Inside your CallGemini class
+def _call_one(self, model, row):
+    message = row["Message"]
+    max_retries = 5
+    
+    for i in range(max_retries):
+        try:
+            response = model.models.generate_content(
+                model=self.model,
+                contents=[self.prompt, message],
+                config=self.generate_content_config # Includes your response_schema
+            )
+            return json.loads(response.text)
+            
+        except Exception as e:
+            # Check for 429 error code
+            if "429" in str(e) and i < max_retries - 1:
+                # Truncated exponential backoff with jitter
+                sleep_time = (2 ** i) + random.uniform(0, 1) 
+                time.sleep(sleep_time)
+                continue
+            # Log failure or return error for BigQuery
+            return {"error": str(e), "status": "failed"}
+
+
+import json
+
+def _call_one(self, model, row):
+    # ... previous setup code ...
+    response = model.models.generate_content(
+        model=self.model_id,
+        contents=[self.prompt, row["Message"]],
+        config=config
+    )
+    
+    try:
+        # Convert the JSON string from Gemini into a Python dictionary
+        return json.loads(response.text)
+    except Exception as e:
+        # Return a dictionary with error info to keep the pipeline from crashing
+        return {"error": str(e), "raw_response": response.text}
+
+# Define your output table path
+OUTPUT_TABLE = "your-project:your_dataset.your_table_name"
+
+results = (
+    batched_call_pipeline
+    | "Read from BQ" >> beam.io.ReadFromBigQuery(query=query, use_standard_sql=True)
+    | "Format Input" >> beam.Map(transform_row_to_comms)
+    | "Gemini Inference" >> RunInference(model_handler=CallGeminiBatch(RISK_ASSESSMENT_SCHEMA))
+    | "Write to BQ" >> beam.io.WriteToBigQuery(
+        table=OUTPUT_TABLE,
+        schema=schema_for_bq,
+        create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+        write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND
+    )
+)
+
+
+
 # Use the schema defined in your last image for BigQuery
 schema_for_bq = {
     'fields': [
